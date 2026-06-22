@@ -11,7 +11,7 @@ on:
 jobs:
   push_to_registry:
     name: Push Docker image to Docker Hub
-    if: startsWith(github.ref, 'refs/tags/') || (!startsWith(github.ref, 'refs/heads/master') && !startsWith(github.ref, 'refs/heads/dependabot') && !startsWith(github.event.head_commit.message, 'ci') && !startsWith(github.event.head_commit.message, 'doc'))
+    if: startsWith(github.ref, 'refs/tags/') || (!startsWith(github.ref, 'refs/heads/dependabot') && !startsWith(github.event.head_commit.message, 'ci') && !startsWith(github.event.head_commit.message, 'doc'))
     runs-on: ubuntu-latest
     steps:
       # Get the repository's code
@@ -39,7 +39,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: a1ex4/ownfoil
+          images: arthmellt/foilstead
           flavor: |
             latest=auto
           tags: |
