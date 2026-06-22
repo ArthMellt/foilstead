@@ -212,10 +212,13 @@ def get_cnmts(container):
     cnmts = []
     if isinstance(container, Nsp.Nsp):
         try:
-            cnmt = container.cnmt()
-            cnmts.append(cnmt)
+            for f in container:
+                if hasattr(f, '_path') and f._path.endswith('.cnmt.nca'):
+                    cnmts.append(f)
+            if not cnmts:
+                raise IOError('No .cnmt.nca found in NSP.')
         except Exception as e:
-            logger.warning('CNMT section not found in Nsp.')
+            logger.warning(f'CNMT section not found in Nsp: {e}')
 
     elif isinstance(container, Xci.Xci):
         container = container.hfs0['secure']
