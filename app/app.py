@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory, Response
+from werkzeug.utils import secure_filename
 from flask_login import LoginManager
 from scheduler import init_scheduler, validate_interval_string
 from functools import wraps
@@ -439,6 +440,58 @@ def upload_file():
         resp['data']['corrupt_keys'] = corrupt_keys
 
     return jsonify(resp)
+
+
+@app.route('/upload')
+@access_required('upload')
+def upload_page():
+    app_settings = load_settings()
+    library_paths = app_settings['library']['paths']
+    return render_template(
+        'upload.html',
+        title='Upload',
+        library_paths=library_paths,
+        admin_account_created=admin_account_created()
+    )
+
+@app.post('/api/library/upload')
+@access_required('upload')
+def upload_game_files():
+    errors = []
+    saved = []
+
+    dest_path = request.form.get('library_path', '')
+    app_settings = load_settings()
+    valid_paths = app_settings['library']['paths']
+
+    if dest_path not in valid_paths:
+        return jsonify({'success': False, 'errors': ['Invalid library path'], 'saved': []})
+
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'success': False, 'errors': ['No files provided'], 'saved': []})
+
+    for file in files:
+        if not file.filename:
+            continue
+        ext = file.filename.rsplit('.', 1)[-1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            errors.append(f'{file.filename}: unsupported file type')
+            continue
+        filename = secure_filename(file.filename)
+        save_path = os.path.join(dest_path, filename)
+        try:
+            file.save(save_path)
+            saved.append(filename)
+            logger.info(f'Uploaded game file: {save_path}')
+        except Exception as e:
+            errors.append(f'{filename}: {e}')
+            logger.error(f'Failed to save uploaded file {filename}: {e}')
+
+    if saved:
+        post_library_change()
+
+    return jsonify({'success': len(saved) > 0, 'errors': errors, 'saved': saved})
 
 
 @app.route('/api/titles', methods=['GET'])

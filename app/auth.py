@@ -157,7 +157,7 @@ auth_blueprint = Blueprint('auth', __name__)
 login_manager = LoginManager()
 login_manager.login_view = 'auth.login'
 
-def create_or_update_user(username, password, admin_access=False, shop_access=False, backup_access=False):
+def create_or_update_user(username, password, admin_access=False, shop_access=False, backup_access=False, upload_access=False):
     """
     Create a new user or update an existing user with the given credentials and access rights.
     """
@@ -166,23 +166,24 @@ def create_or_update_user(username, password, admin_access=False, shop_access=Fa
     if not is_valid:
         logger.error(f'Username validation failed for user {username}: {error_message}')
         raise ValueError(f"Username validation failed: {error_message}")
-    
+
     # Validate password before creating/updating user
     is_valid, error_message = validate_password(password)
     if not is_valid:
         logger.error(f'Password validation failed for user {username}: {error_message}')
         raise ValueError(f"Password validation failed: {error_message}")
-    
+
     user = User.query.filter_by(user=username).first()
     if user:
         logger.info(f'Updating existing user {username}')
         user.admin_access = admin_access
         user.shop_access = shop_access
         user.backup_access = backup_access
+        user.upload_access = upload_access
         user.password = generate_password_hash(password, method='scrypt')
     else:
         logger.info(f'Creating new user {username}')
-        new_user = User(user=username, password=generate_password_hash(password, method='scrypt'), admin_access=admin_access, shop_access=shop_access, backup_access=backup_access)
+        new_user = User(user=username, password=generate_password_hash(password, method='scrypt'), admin_access=admin_access, shop_access=shop_access, backup_access=backup_access, upload_access=upload_access)
         db.session.add(new_user)
     db.session.commit()
 
@@ -198,11 +199,13 @@ def init_user_from_environment(environment_name, admin=False):
             admin_access = True
             shop_access = True
             backup_access = True
+            upload_access = True
         else:
             logger.info('Initializing a regular user from environment variable...')
             admin_access = False
             shop_access = True
             backup_access = False
+            upload_access = False
 
         if not admin:
             existing_admin = admin_account_created()
@@ -210,7 +213,7 @@ def init_user_from_environment(environment_name, admin=False):
                 logger.error(f'Error creating user {username}, first account created must be admin')
                 return
 
-        create_or_update_user(username, password, admin_access, shop_access, backup_access)
+        create_or_update_user(username, password, admin_access, shop_access, backup_access, upload_access)
 
 def init_users(app):
     with app.app_context():
@@ -259,7 +262,7 @@ def profile():
 def get_users():
     all_users = [
         dict(db_user._mapping)
-        for db_user in db.session.query(User.id, User.user, User.admin_access, User.shop_access, User.backup_access).all()
+        for db_user in db.session.query(User.id, User.user, User.admin_access, User.shop_access, User.backup_access, User.upload_access).all()
     ]
     return jsonify(all_users)
 
@@ -295,9 +298,11 @@ def signup_post():
     if admin_access:
         shop_access = True
         backup_access = True
+        upload_access = True
     else:
         shop_access = data['shop_access']
         backup_access = data['backup_access']
+        upload_access = data.get('upload_access', False)
 
     # Validate username first
     is_valid, error_message = validate_username(username)
@@ -341,7 +346,7 @@ def signup_post():
 
     try:
         # create a new user with the form data. Hash the password so the plaintext version isn't saved.
-        create_or_update_user(username, password, admin_access, shop_access, backup_access)
+        create_or_update_user(username, password, admin_access, shop_access, backup_access, upload_access)
         logger.info(f'Successfully created user {username}.')
     except ValueError as e:
         # This should not happen since we validate above, but just in case
