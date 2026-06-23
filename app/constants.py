@@ -66,6 +66,12 @@ DEFAULT_SETTINGS = {
     },
     "scheduler": {
         "scan_interval": "12h",
+    },
+    "send_to": {
+        "host": "",
+        "port": 21,
+        "username": "",
+        "password": "",
     }
 }
 

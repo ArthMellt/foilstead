@@ -248,3 +248,10 @@ def set_scheduler_settings(data):
     with settings_lock:
         with open(CONFIG_FILE, 'w') as yaml_file:
             yaml.dump(settings, yaml_file)
+
+def set_send_to_settings(data):
+    settings = load_settings()
+    settings['send_to'].update(data)
+    with settings_lock:
+        with open(CONFIG_FILE, 'w') as yaml_file:
+            yaml.dump(settings, yaml_file)

@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "nav.html" %}
+
+<div class="container mt-4">
+    <h2>Send To Switch</h2>
+    <p class="text-muted">Configure your Switch's FTP address and send files directly from your library.</p>
+
+    <!-- FTP Configuration -->
+    <div class="card mb-4">
+        <div class="card-header">Switch Connection</div>
+        <div class="card-body">
+            <form id="sendToConfigForm" class="row g-3">
+                <div class="col-md-5">
+                    <label for="switchHost" class="form-label">Switch IP Address</label>
+                    <input type="text" class="form-control" id="switchHost" placeholder="192.168.0.12"
+                        value="{{ send_to.host }}">
+                </div>
+                <div class="col-md-2">
+                    <label for="switchPort" class="form-label">Port</label>
+                    <input type="number" class="form-control" id="switchPort" placeholder="21"
+                        value="{{ send_to.port }}">
+                </div>
+                <div class="col-md-2">
+                    <label for="switchUsername" class="form-label">Username</label>
+                    <input type="text" class="form-control" id="switchUsername" placeholder="(optional)"
+                        value="{{ send_to.username }}">
+                </div>
+                <div class="col-md-3">
+                    <label for="switchPassword" class="form-label">Password</label>
+                    <input type="password" class="form-control" id="switchPassword" placeholder="(optional)"
+                        value="{{ send_to.password }}">
+                </div>
+                <div class="col-12">
+                    <button type="submit" class="btn btn-primary">Save Connection</button>
+                    <span id="configSaveStatus" class="ms-2 text-success d-none">Saved!</span>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- File List -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Library Files</span>
+            <input type="text" class="form-control form-control-sm w-auto" id="fileSearch" placeholder="Filter files...">
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="fileTable">
+                    <thead>
+                        <tr>
+                            <th>Filename</th>
+                            <th>Type</th>
+                            <th>Size</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for file in files %}
+                        <tr id="file-row-{{ file.id }}">
+                            <td class="align-middle">{{ file.filename }}</td>
+                            <td class="align-middle"><span class="badge bg-secondary">{{ file.extension | upper }}</span></td>
+                            <td class="align-middle text-muted" style="white-space:nowrap">{{ (file.size / 1073741824) | round(2) }} GB</td>
+                            <td class="align-middle" style="min-width:180px">
+                                <div class="d-flex align-items-center gap-2">
+                                    <button class="btn btn-sm btn-outline-primary send-btn flex-shrink-0"
+                                        data-file-id="{{ file.id }}"
+                                        data-filename="{{ file.filename }}">
+                                        Send
+                                    </button>
+                                    <div class="progress flex-grow-1 d-none" id="progress-wrap-{{ file.id }}" style="height:8px">
+                                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                            id="progress-bar-{{ file.id }}"
+                                            role="progressbar" style="width:0%"></div>
+                                    </div>
+                                    <small class="text-muted d-none flex-shrink-0" id="progress-pct-{{ file.id }}">0%</small>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-muted text-center py-3">No files in library.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Toast -->
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1100">
+        <div id="sendToast" class="toast align-items-center border-0" role="alert">
+            <div class="d-flex">
+                <div class="toast-body" id="toastMessage"></div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('sendToConfigForm').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const status = document.getElementById('configSaveStatus');
+        status.classList.add('d-none');
+
+        const data = {
+            host: document.getElementById('switchHost').value.trim(),
+            port: parseInt(document.getElementById('switchPort').value) || 21,
+            username: document.getElementById('switchUsername').value.trim(),
+            password: document.getElementById('switchPassword').value,
+        };
+
+        const resp = await fetch('/api/settings/send-to', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await resp.json();
+        if (result.success) {
+            status.classList.remove('d-none');
+            setTimeout(() => status.classList.add('d-none'), 2000);
+        }
+    });
+
+    document.querySelectorAll('.send-btn').forEach(btn => {
+        btn.addEventListener('click', async function () {
+            const fileId = this.dataset.fileId;
+            const filename = this.dataset.filename;
+            const progressWrap = document.getElementById(`progress-wrap-${fileId}`);
+            const progressBar = document.getElementById(`progress-bar-${fileId}`);
+            const progressPct = document.getElementById(`progress-pct-${fileId}`);
+
+            this.disabled = true;
+            progressWrap.classList.remove('d-none');
+            progressPct.classList.remove('d-none');
+            progressBar.style.width = '0%';
+            progressBar.classList.add('progress-bar-animated');
+            progressPct.textContent = '0%';
+
+            try {
+                const resp = await fetch('/api/send-to/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_id: parseInt(fileId) })
+                });
+                const result = await resp.json();
+
+                if (!result.success) {
+                    showToast(`Failed: ${result.error}`, false);
+                    resetProgress(fileId);
+                    this.disabled = false;
+                    return;
+                }
+
+                const evtSource = new EventSource(`/api/send-to/progress/${result.transfer_id}`);
+                const sendBtn = this;
+
+                evtSource.onmessage = function (e) {
+                    const data = JSON.parse(e.data);
+                    progressBar.style.width = data.progress + '%';
+                    progressPct.textContent = data.progress + '%';
+
+                    if (data.done) {
+                        evtSource.close();
+                        progressBar.classList.remove('progress-bar-animated');
+                        if (data.error) {
+                            progressBar.classList.add('bg-danger');
+                            showToast(`Failed: ${data.error}`, false);
+                        } else {
+                            progressBar.classList.add('bg-success');
+                            showToast(`Sent ${filename} to Switch`, true);
+                        }
+                        setTimeout(() => resetProgress(fileId), 3000);
+                        sendBtn.disabled = false;
+                    }
+                };
+
+                evtSource.onerror = function () {
+                    evtSource.close();
+                    showToast('Connection lost during transfer', false);
+                    resetProgress(fileId);
+                    sendBtn.disabled = false;
+                };
+
+            } catch (err) {
+                showToast('Unexpected error: ' + err, false);
+                resetProgress(fileId);
+                this.disabled = false;
+            }
+        });
+    });
+
+    function resetProgress(fileId) {
+        const progressWrap = document.getElementById(`progress-wrap-${fileId}`);
+        const progressBar = document.getElementById(`progress-bar-${fileId}`);
+        const progressPct = document.getElementById(`progress-pct-${fileId}`);
+        progressWrap.classList.add('d-none');
+        progressPct.classList.add('d-none');
+        progressBar.style.width = '0%';
+        progressBar.classList.remove('bg-success', 'bg-danger', 'progress-bar-animated');
+    }
+
+    document.getElementById('fileSearch').addEventListener('input', function () {
+        const q = this.value.toLowerCase();
+        document.querySelectorAll('#fileTable tbody tr').forEach(row => {
+            const name = row.querySelector('td')?.textContent.toLowerCase() || '';
+            row.style.display = name.includes(q) ? '' : 'none';
+        });
+    });
+
+    function showToast(message, success) {
+        const toast = document.getElementById('sendToast');
+        const toastMsg = document.getElementById('toastMessage');
+        toast.classList.remove('bg-success', 'bg-danger', 'text-white');
+        toast.classList.add(success ? 'bg-success' : 'bg-danger', 'text-white');
+        toastMsg.textContent = message;
+        bootstrap.Toast.getOrCreateInstance(toast).show();
+    }
+</script>
+
+{% endblock %}
