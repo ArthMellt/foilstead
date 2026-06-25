@@ -518,6 +518,38 @@ def reset_file_identification(file_id):
         logger.error(f"Error resetting identification for file id={file_id}: {e}")
         return False, str(e)
 
+def full_reset_file_and_title(file_id):
+    """Delete all title/app DB entries for this file's game and reset its identification state.
+    Gives a completely clean slate so the next scan behaves identically to a first-time upload."""
+    try:
+        file_obj = get_file_from_db(file_id)
+        if not file_obj:
+            return False, "File not found"
+
+        # Collect title DB IDs before touching anything — app.title_id is the FK int, not the string
+        title_db_ids = {app.title_id for app in file_obj.apps if app.title_id is not None}
+
+        # Delete each title row — SQLAlchemy cascade="all, delete-orphan" on Titles.apps
+        # removes all Apps rows, and the DB-level CASCADE on app_files.app_id removes join rows
+        for title_db_id in title_db_ids:
+            title_obj = Titles.query.filter_by(id=title_db_id).first()
+            if title_obj:
+                db.session.delete(title_obj)
+
+        file_obj.identified = False
+        file_obj.identification_type = None
+        file_obj.identification_error = None
+        file_obj.multicontent = False
+        file_obj.nb_content = 0
+
+        db.session.commit()
+        logger.info(f"Full title reset for file id={file_id} ({file_obj.filename}): cleared {len(title_db_ids)} title(s)")
+        return True, None
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error in full_reset_file_and_title for file id={file_id}: {e}")
+        return False, str(e)
+
 def increment_download_count(filepath):
     """Increment the download count for a file by filepath"""
     try:
