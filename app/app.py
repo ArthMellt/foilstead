@@ -25,6 +25,7 @@ from utils import *
 from library import *
 import titledb
 import os
+import re
 from clients import CyberFoilClient, TinfoilClient, SphairaClient
 
 _transfer_progress = {}
@@ -656,32 +657,64 @@ def post_library_change():
         titles_lib.identification_in_progress_count -= 1
         titles_lib.unload_titledb()
 
+def _strip_id_tags(filename):
+    """Remove [APPID] and [vVERSION] tags from a filename stem, leaving everything else intact."""
+    stem, ext = os.path.splitext(filename)
+    stem = re.sub(r'\s*\[[0-9A-Fa-f]{16}\]', '', stem)
+    stem = re.sub(r'\s*\[v\d+\]', '', stem)
+    return stem.strip() + ext
+
 @app.post('/api/library/rescan-file/<int:file_id>')
 @access_required('admin')
 def rescan_file_api(file_id):
     try:
-        file_obj = db.session.query(Files.id, Files.filepath, Files.filename).filter_by(id=file_id).first()
+        file_obj = Files.query.filter_by(id=file_id).first()
         if not file_obj:
             return jsonify({'success': False, 'error': 'File not found'}), 404
-
         if not os.path.exists(file_obj.filepath):
             return jsonify({'success': False, 'error': 'File no longer exists on disk'}), 400
 
-        ok, err = reset_file_identification(file_id)
-        if not ok:
-            return jsonify({'success': False, 'error': err}), 500
-
-        # Identify this file synchronously so the result is immediate and can't
-        # be beaten by a concurrently-debounced post_library_change call.
-        titles_lib.load_titledb()
+        # Block the background watcher from competing during the entire reset+scan window
+        titles_lib.identification_in_progress_count += 1
         try:
-            ok, err = rescan_file_in_library(file_id)
-            add_missing_apps_to_db()
-            update_titles()
-            generate_library()
+            # 1. Delete all title/app records for this game — clean slate
+            ok, err = full_reset_file_and_title(file_id)
+            if not ok:
+                return jsonify({'success': False, 'error': err}), 500
+
+            # Re-fetch after commit so we have a live ORM object with updated state
+            file_obj = Files.query.filter_by(id=file_id).first()
+
+            # 2. Strip [appid][version] tags from the filename so the CNMT fallback
+            #    can't lock in the wrong type from the old filename metadata
+            new_filename = _strip_id_tags(file_obj.filename)
+            if new_filename != file_obj.filename:
+                new_filepath = os.path.join(os.path.dirname(file_obj.filepath), new_filename)
+                try:
+                    os.rename(file_obj.filepath, new_filepath)
+                    old_name = file_obj.filename
+                    file_obj.filename = new_filename
+                    file_obj.filepath = new_filepath
+                    db.session.commit()
+                    logger.info(f'Renamed for rescan: {old_name!r} → {new_filename!r}')
+                except OSError as rename_err:
+                    logger.warning(f'Could not rename {file_obj.filename}: {rename_err} — proceeding without rename')
+
+            # 3. Fresh identification — load_titledb increments the counter again;
+            #    its finally block decrements it, leaving our outer +1 still active
+            #    until the outer finally runs.
+            titles_lib.load_titledb()
+            try:
+                ok, err = rescan_file_in_library(file_id)
+                add_missing_apps_to_db()
+                update_titles()
+                generate_library()
+            finally:
+                titles_lib.identification_in_progress_count -= 1  # balances load_titledb
+                titles_lib.unload_titledb()
+
         finally:
-            titles_lib.identification_in_progress_count -= 1
-            titles_lib.unload_titledb()
+            titles_lib.identification_in_progress_count -= 1  # balances our initial block
 
         if not ok:
             return jsonify({'success': False, 'error': err}), 500
