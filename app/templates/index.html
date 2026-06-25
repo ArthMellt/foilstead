@@ -98,7 +98,7 @@
                         class="bi bi-card-heading"></i></button>
                 <button id="view-toggle-btn-icon" type="button" class="btn btn-primary view-toggle-btn" data-view="icon"><i
                         class="bi bi-grid-fill"></i></button>
-                <button id="view-toggle-btn-list" type="button" class="btn btn-primary view-toggle-btn" data-view="list" disabled=""><i
+                <button id="view-toggle-btn-list" type="button" class="btn btn-primary view-toggle-btn" data-view="list"><i
                         class="bi bi-list-ul"></i></button>
             </div>
         </div>
@@ -139,6 +139,16 @@
     </nav>
 </div>
 
+<!-- Toast for list view actions -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1100">
+    <div id="libraryToast" class="toast align-items-center border-0" role="alert">
+        <div class="d-flex">
+            <div class="toast-body" id="libraryToastMessage"></div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    </div>
+</div>
+
 <script>
     let games;
     let filteredGames;
@@ -147,6 +157,7 @@
     let totalGames = 0;
     let cardSize = 3; // Default card size
     let currentView = 'card'; // Default view is 'card'
+    let lastLibraryHash = null;
 
     function fetchGames() {
         return new Promise((resolve, reject) => {
@@ -154,6 +165,7 @@
                 totalGames = data.total;
                 games = data.games;
                 filteredGames = games;
+                if (data.hash) lastLibraryHash = data.hash;
                 resolve();
             }).fail(function() {
                 reject();
@@ -171,6 +183,9 @@
         } else if (currentView === 'icon') {
             renderIconView();
             adjustIconSizes();
+        } else if (currentView === 'list') {
+            renderListView();
+            return; // list view manages its own tooltips
         }
 
         // init version tooltips
@@ -426,10 +441,7 @@
             itemsPerPage = parseInt(savedItemsPerPage);
         }
 
-        const savedCurrentView = localStorage.getItem('currentView');
-        if (savedCurrentView) {
-            currentView = savedCurrentView;
-        }
+        // currentView intentionally not restored from localStorage — always start in card view
 
         const savedCardSize = localStorage.getItem('cardSize');
         if (savedCardSize){
@@ -472,14 +484,16 @@
 
         // Event listener for view buttons
         $('.view-toggle-btn').click(function () {
-            $('.view-toggle-btn').removeClass("active"); 
+            $('.view-toggle-btn').removeClass("active");
             $(this).addClass("active");
             const view = $(this).data('view');
-            localStorage.setItem('currentView', view)
             if (view === 'card') {
                 currentView = 'card';
             } else if (view === 'icon') {
                 currentView = 'icon';
+            } else if (view === 'list') {
+                currentView = 'list';
+                libraryFiles = null; // refresh file data when switching to list view
             }
             renderGames(games);
         });
@@ -651,6 +665,173 @@
     //     applyFilters();
     // });
 
-    
+    // ── Library auto-refresh ───────────────────────────────────────────────
+
+    async function pollLibraryHash() {
+        if (document.hidden) return;
+        try {
+            const resp = await fetch('/api/library/hash');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (lastLibraryHash !== null && data.hash !== lastLibraryHash) {
+                lastLibraryHash = data.hash;
+                libraryFiles = null; // invalidate file cache too
+                await fetchGames();
+                applyFilters();
+            } else {
+                lastLibraryHash = data.hash;
+            }
+        } catch (e) {
+            // network error — ignore, try again next interval
+        }
+    }
+
+    setInterval(pollLibraryHash, 10000);
+
+    // ── List view ──────────────────────────────────────────────────────────
+
+    let libraryFiles = null;
+
+    async function fetchLibraryFiles() {
+        if (libraryFiles) return libraryFiles;
+        const resp = await fetch('/api/library/files');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        libraryFiles = data.files;
+        return libraryFiles;
+    }
+
+    async function renderListView() {
+        const gameGrid = $('#gameGrid');
+        gameGrid.empty().html('<p class="text-center text-muted py-3">Loading files…</p>');
+
+        let files;
+        try {
+            files = await fetchLibraryFiles();
+        } catch (e) {
+            gameGrid.html('<p class="text-center text-danger py-3">Could not load files — admin access required.</p>');
+            return;
+        }
+
+        // Filter by search term only (type/ownership filters apply to title data, not files)
+        const searchTerm = $('#textFilter').val().toLowerCase();
+        let display = files;
+        if (searchTerm) {
+            display = files.filter(f =>
+                f.filename.toLowerCase().includes(searchTerm) ||
+                (f.contents || []).some(c => (c.app_id || '').toLowerCase().includes(searchTerm))
+            );
+        }
+
+        const start = (currentPage - 1) * itemsPerPage;
+        const page = display.slice(start, start + itemsPerPage);
+
+        if (page.length === 0) {
+            gameGrid.html('<p class="text-center text-muted py-3">No files found.</p>');
+            updatePaginationControls(0);
+            return;
+        }
+
+        const table = $('<table class="table table-hover table-dark mb-0 w-100"></table>');
+        table.append(`<thead><tr>
+            <th>Filename</th>
+            <th style="white-space:nowrap">Size</th>
+            <th>Status</th>
+            <th>Contents</th>
+            <th></th>
+        </tr></thead>`);
+
+        const tbody = $('<tbody></tbody>');
+        page.forEach(file => {
+            const row = $(`<tr id="list-file-row-${file.id}"></tr>`);
+
+            row.append($('<td class="align-middle small"></td>').text(file.filename));
+            row.append(`<td class="align-middle text-muted" style="white-space:nowrap">${(file.size / 1073741824).toFixed(2)} GB</td>`);
+
+            const statusCell = $(`<td class="align-middle" id="list-id-status-${file.id}"></td>`);
+            statusCell.append(buildStatusBadge(file));
+            row.append(statusCell);
+
+            const contentsCell = $('<td class="align-middle"></td>');
+            if (file.contents && file.contents.length > 0) {
+                file.contents.forEach(c => {
+                    contentsCell.append(
+                        $('<span class="badge bg-secondary me-1"></span>').text(`${c.app_type}: ${c.app_id}`)
+                    );
+                });
+            } else {
+                contentsCell.html('<span class="text-muted small">—</span>');
+            }
+            row.append(contentsCell);
+
+            const rescanBtn = $('<button class="btn btn-sm btn-outline-secondary">Rescan</button>');
+            rescanBtn.on('click', () => rescanFile(file.id, file.filename));
+            row.append($('<td class="align-middle"></td>').append(rescanBtn));
+
+            tbody.append(row);
+        });
+
+        table.append(tbody);
+        const wrapper = $('<div class="w-100"></div>').append(table);
+        gameGrid.empty().append(wrapper);
+        updatePaginationControls(display.length);
+    }
+
+    function buildStatusBadge(file) {
+        if (file.identified) {
+            return $('<span class="badge bg-success"></span>').text(file.identification_type || 'ok');
+        } else if (file.identification_error) {
+            const badge = $('<span class="badge bg-danger"></span>').text('error');
+            if (file.identification_error) {
+                badge.attr('title', file.identification_error)
+                     .attr('data-bs-toggle', 'tooltip');
+            }
+            return badge;
+        } else {
+            return $('<span class="badge bg-warning text-dark"></span>').text('pending');
+        }
+    }
+
+    async function rescanFile(fileId, filename) {
+        const statusCell = $(`#list-id-status-${fileId}`);
+        const row = $(`#list-file-row-${fileId}`);
+        const btn = row.find('button');
+
+        btn.prop('disabled', true).text('…');
+        statusCell.html('<span class="badge bg-secondary">queuing…</span>');
+
+        try {
+            const resp = await fetch(`/api/library/rescan-file/${fileId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const result = await resp.json();
+
+            if (result.success) {
+                statusCell.html('<span class="badge bg-info text-dark">queued</span>');
+                libraryFiles = null; // invalidate cache
+                showLibraryToast(`${filename} queued for re-identification`, true);
+            } else {
+                statusCell.html('<span class="badge bg-danger">error</span>');
+                showLibraryToast(`Rescan failed: ${result.error}`, false);
+            }
+        } catch (err) {
+            statusCell.html('<span class="badge bg-danger">error</span>');
+            showLibraryToast('Unexpected error: ' + err, false);
+        }
+
+        btn.prop('disabled', false).text('Rescan');
+    }
+
+    function showLibraryToast(message, success) {
+        const toast = document.getElementById('libraryToast');
+        const msg = document.getElementById('libraryToastMessage');
+        toast.classList.remove('bg-success', 'bg-danger', 'text-white');
+        toast.classList.add(success ? 'bg-success' : 'bg-danger', 'text-white');
+        msg.textContent = message;
+        bootstrap.Toast.getOrCreateInstance(toast).show();
+    }
+
+
 </script>
 {% endblock %}

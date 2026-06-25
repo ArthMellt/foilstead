@@ -483,6 +483,29 @@ def remove_missing_files_from_db():
     except Exception as e:
         logger.error(f"An error occurred while removing missing files: {str(e)}")
 
+def reset_file_identification(file_id):
+    """Clear identification state for a file so it will be re-processed on the next scan."""
+    try:
+        file_obj = get_file_from_db(file_id)
+        if not file_obj:
+            return False, "File not found"
+
+        remove_file_from_apps(file_id)
+
+        file_obj.identified = False
+        file_obj.identification_type = None
+        file_obj.identification_error = None
+        file_obj.multicontent = False
+        file_obj.nb_content = 0
+        db.session.commit()
+
+        logger.info(f"Reset identification for file id={file_id} ({file_obj.filename})")
+        return True, None
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error resetting identification for file id={file_id}: {e}")
+        return False, str(e)
+
 def increment_download_count(filepath):
     """Increment the download count for a file by filepath"""
     try:
