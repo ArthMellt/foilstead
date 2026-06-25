@@ -45,6 +45,13 @@
                     <small id="progressSize" class="text-muted"></small>
                     <small id="progressSpeed" class="text-muted"></small>
                 </div>
+                <div class="d-flex justify-content-between align-items-center mt-1" id="etaRow">
+                    <small id="progressEta" class="text-muted"></small>
+                    <select id="etaMode" class="form-select form-select-sm" style="width: auto;">
+                        <option value="remaining">Time Remaining</option>
+                        <option value="eta">Estimated Completion Time</option>
+                    </select>
+                </div>
             </div>
         </div>
     </div>
@@ -69,6 +76,23 @@ function formatBytes(bytes) {
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
+function formatTimeRemaining(secs) {
+    secs = Math.max(0, Math.round(secs));
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    const parts = [];
+    if (h > 0) parts.push(h + (h === 1 ? ' hour' : ' hours'));
+    if (m > 0 || h > 0) parts.push(m + (m === 1 ? ' minute' : ' minutes'));
+    parts.push(s + (s === 1 ? ' second' : ' seconds'));
+    return parts.join(' ') + ' remaining';
+}
+
+function formatEtaTime(secsFromNow) {
+    const eta = new Date(Date.now() + secsFromNow * 1000);
+    return 'Done at ' + eta.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
 const btn = document.getElementById('uploadBtn');
 const cancelBtn = document.getElementById('cancelBtn');
 const progressWrap = document.getElementById('progressWrap');
@@ -77,11 +101,19 @@ const progressPct = document.getElementById('progressPct');
 const progressLabel = document.getElementById('progressLabel');
 const progressSize = document.getElementById('progressSize');
 const progressSpeed = document.getElementById('progressSpeed');
+const progressEta = document.getElementById('progressEta');
+const etaMode = document.getElementById('etaMode');
 const results = document.getElementById('uploadResults');
 const successBox = document.getElementById('uploadSuccess');
 const errorBox = document.getElementById('uploadErrors');
 const savedList = document.getElementById('savedList');
 const errorList = document.getElementById('errorList');
+
+const savedEtaMode = localStorage.getItem('uploadEtaMode');
+if (savedEtaMode) etaMode.value = savedEtaMode;
+etaMode.addEventListener('change', function () {
+    localStorage.setItem('uploadEtaMode', etaMode.value);
+});
 
 let activeXhr = null;
 
@@ -90,6 +122,7 @@ function resetUploadUI() {
     cancelBtn.classList.add('d-none');
     progressWrap.classList.add('d-none');
     progressBar.classList.add('progress-bar-animated');
+    progressEta.textContent = '';
     activeXhr = null;
 }
 
@@ -137,10 +170,12 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
     progressLabel.textContent = 'Uploading...';
     progressSize.textContent = '';
     progressSpeed.textContent = '';
+    progressEta.textContent = '';
     progressWrap.classList.remove('d-none');
 
     let lastProgressTime = null;
     let lastLoaded = 0;
+    let uploadStartTime = null;
 
     const formData = new FormData();
     formData.append('library_path', document.getElementById('libraryPath').value);
@@ -155,6 +190,8 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
     xhr.upload.onprogress = function (e) {
         if (e.lengthComputable) {
             const now = Date.now();
+            if (!uploadStartTime) uploadStartTime = now;
+
             const pct = Math.round(e.loaded / e.total * 100);
             progressBar.style.width = pct + '%';
             progressPct.textContent = pct + '%';
@@ -169,10 +206,19 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
             lastProgressTime = now;
             lastLoaded = e.loaded;
 
+            const totalElapsed = (now - uploadStartTime) / 1000;
+            if (totalElapsed > 0 && e.loaded > 0 && pct < 100) {
+                const avgSpeed = e.loaded / totalElapsed;
+                const etaSecs = (e.total - e.loaded) / avgSpeed;
+                progressEta.textContent = etaMode.value === 'eta'
+                    ? formatEtaTime(etaSecs)
+                    : formatTimeRemaining(etaSecs);
+            }
+
             if (pct === 100) {
-                progressLabel.textContent = 'Processing...';
-                progressBar.classList.remove('progress-bar-animated');
+                progressLabel.textContent = 'Saving to library…';
                 progressSpeed.textContent = '';
+                progressEta.textContent = '';
                 cancelBtn.classList.add('d-none');
             }
         }
