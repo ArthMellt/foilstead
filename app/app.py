@@ -620,8 +620,15 @@ def get_all_titles_api():
 
     return jsonify({
         'total': len(titles_library),
-        'games': titles_library
+        'games': titles_library,
+        'hash': compute_apps_hash(),
     })
+
+
+@app.get('/api/library/hash')
+@access_required('shop')
+def get_library_hash_api():
+    return jsonify({'hash': compute_apps_hash()})
 
 @app.route('/api/get_game/<int:id>')
 @file_access
@@ -648,6 +655,30 @@ def post_library_change():
         generate_library()
         titles_lib.identification_in_progress_count -= 1
         titles_lib.unload_titledb()
+
+@app.post('/api/library/rescan-file/<int:file_id>')
+@access_required('admin')
+def rescan_file_api(file_id):
+    try:
+        file_obj = db.session.query(Files.id, Files.filepath, Files.filename).filter_by(id=file_id).first()
+        if not file_obj:
+            return jsonify({'success': False, 'error': 'File not found'}), 404
+
+        if not os.path.exists(file_obj.filepath):
+            return jsonify({'success': False, 'error': 'File no longer exists on disk'}), 400
+
+        ok, err = reset_file_identification(file_id)
+        if not ok:
+            return jsonify({'success': False, 'error': err}), 500
+
+        post_library_change()
+
+        logger.info(f'Rescan queued for file id={file_id} ({file_obj.filename})')
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'Unexpected error in rescan_file_api for file_id={file_id}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.post('/api/library/scan')
 @access_required('admin')
@@ -682,8 +713,41 @@ def scan_library_api():
     resp = {
         'success': success,
         'errors': errors
-    } 
+    }
     return jsonify(resp)
+
+
+@app.get('/api/library/files')
+@access_required('admin')
+def get_library_files_api():
+    files = Files.query.options(
+        db.joinedload(Files.apps).joinedload(Apps.title)
+    ).order_by(Files.filename).all()
+
+    result = []
+    for f in files:
+        contents = [
+            {
+                'app_id': app.app_id,
+                'app_type': app.app_type,
+                'app_version': app.app_version,
+                'title_id': app.title.title_id if app.title else None,
+            }
+            for app in f.apps
+        ]
+        result.append({
+            'id': f.id,
+            'filename': f.filename,
+            'size': f.size,
+            'extension': f.extension,
+            'identified': f.identified,
+            'identification_type': f.identification_type,
+            'identification_error': f.identification_error,
+            'multicontent': f.multicontent,
+            'contents': contents,
+        })
+
+    return jsonify({'files': result})
 
 
 # @app.before_request

@@ -1,8 +1,8 @@
 version: "3"
 
 services:
-  ownfoil:
-    container_name: ownfoil
+  foilstead:
+    container_name: foilstead
     image: arthmellt/foilstead:latest
     environment:
       # For write permission in config directory
