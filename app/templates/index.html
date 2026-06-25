@@ -623,12 +623,9 @@
         );
     }
 
-    // Function to apply filters and show/hide game cards with animation
-    function applyFilters() {
-        // Get current search term
+    function computeFilteredGames() {
         const searchTerm = $('#textFilter').val();
         let filtered = filterGamesBySearchTerm(games, searchTerm);
-
         if (activeTypeFilter) {
             filtered = filtered.filter(game => game.app_type === activeTypeFilter);
         }
@@ -641,8 +638,12 @@
         if (activeCompletionFilter) {
             filtered = filtered.filter(game => activeCompletionFilter === 'Complete' ? game.has_all_dlcs === true : game.has_all_dlcs === false);
         }
+        return filtered;
+    }
 
-        filteredGames = filtered;
+    // Function to apply filters and show/hide game cards with animation
+    function applyFilters() {
+        filteredGames = computeFilteredGames();
         currentPage = 1;
         renderGames();
     }
@@ -675,9 +676,10 @@
             const data = await resp.json();
             if (lastLibraryHash !== null && data.hash !== lastLibraryHash) {
                 lastLibraryHash = data.hash;
-                libraryFiles = null; // invalidate file cache too
+                libraryFiles = null;
                 await fetchGames();
-                applyFilters();
+                filteredGames = computeFilteredGames();
+                renderGames();
             } else {
                 lastLibraryHash = data.hash;
             }
