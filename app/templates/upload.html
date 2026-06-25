@@ -38,6 +38,10 @@
                     <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated"
                         role="progressbar" style="width: 0%"></div>
                 </div>
+                <div class="d-flex justify-content-between mt-1">
+                    <small id="progressSize" class="text-muted"></small>
+                    <small id="progressSpeed" class="text-muted"></small>
+                </div>
             </div>
         </div>
     </div>
@@ -55,6 +59,13 @@
 </div>
 
 <script>
+function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
 document.getElementById('uploadForm').addEventListener('submit', function (e) {
     e.preventDefault();
 
@@ -63,6 +74,8 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
     const progressBar = document.getElementById('progressBar');
     const progressPct = document.getElementById('progressPct');
     const progressLabel = document.getElementById('progressLabel');
+    const progressSize = document.getElementById('progressSize');
+    const progressSpeed = document.getElementById('progressSpeed');
     const results = document.getElementById('uploadResults');
     const successBox = document.getElementById('uploadSuccess');
     const errorBox = document.getElementById('uploadErrors');
@@ -78,7 +91,12 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
     progressBar.style.width = '0%';
     progressPct.textContent = '0%';
     progressLabel.textContent = 'Uploading...';
+    progressSize.textContent = '';
+    progressSpeed.textContent = '';
     progressWrap.classList.remove('d-none');
+
+    let lastProgressTime = null;
+    let lastLoaded = 0;
 
     const formData = new FormData();
     formData.append('library_path', document.getElementById('libraryPath').value);
@@ -91,12 +109,25 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
 
     xhr.upload.onprogress = function (e) {
         if (e.lengthComputable) {
+            const now = Date.now();
             const pct = Math.round(e.loaded / e.total * 100);
             progressBar.style.width = pct + '%';
             progressPct.textContent = pct + '%';
+            progressSize.textContent = formatBytes(e.loaded) + ' / ' + formatBytes(e.total);
+
+            if (lastProgressTime !== null) {
+                const elapsed = (now - lastProgressTime) / 1000;
+                if (elapsed > 0) {
+                    progressSpeed.textContent = formatBytes((e.loaded - lastLoaded) / elapsed) + '/s';
+                }
+            }
+            lastProgressTime = now;
+            lastLoaded = e.loaded;
+
             if (pct === 100) {
                 progressLabel.textContent = 'Processing...';
                 progressBar.classList.remove('progress-bar-animated');
+                progressSpeed.textContent = '';
             }
         }
     };
