@@ -374,6 +374,71 @@ def identify_library_files(library):
     # Final commit
     db.session.commit()
 
+def rescan_file_in_library(file_id):
+    """Identify a single file synchronously, mirroring the inner loop of identify_library_files."""
+    file_obj = get_file_from_db(file_id)
+    if not file_obj:
+        return False, "File not found in database"
+
+    filepath = file_obj.filepath
+    filename = file_obj.filename
+    logger.info(f'Rescanning file: {filename}')
+
+    try:
+        identification, success, file_contents, error = titles_lib.identify_file(filepath)
+
+        if success and file_contents and not error:
+            title_ids = list(dict.fromkeys([c['title_id'] for c in file_contents]))
+            for title_id in title_ids:
+                add_title_id_in_db(title_id)
+
+            nb_content = 0
+            for file_content in file_contents:
+                logger.info(
+                    f'Rescan {filename}: {file_content["type"]} '
+                    f'{file_content["app_id"]} v{file_content["version"]}'
+                )
+                title_id_in_db = get_title_id_db_id(file_content["title_id"])
+                existing_app = get_app_by_id_and_version(
+                    file_content["app_id"], file_content["version"]
+                )
+                if existing_app:
+                    add_file_to_app(file_content["app_id"], file_content["version"], file_id)
+                else:
+                    new_app = Apps(
+                        app_id=file_content["app_id"],
+                        app_version=file_content["version"],
+                        app_type=file_content["type"],
+                        owned=True,
+                        title_id=title_id_in_db,
+                    )
+                    db.session.add(new_app)
+                    db.session.flush()
+                    file_ref = get_file_from_db(file_id)
+                    if file_ref:
+                        new_app.files.append(file_ref)
+                nb_content += 1
+
+            file_obj.multicontent = (nb_content > 1)
+            file_obj.nb_content = nb_content
+            file_obj.identified = True
+        else:
+            logger.warning(f'Rescan failed for {filename}: {error}')
+            file_obj.identification_error = error
+            file_obj.identified = False
+
+        file_obj.identification_type = identification
+        file_obj.identification_attempts += 1
+        file_obj.last_attempt = datetime.datetime.now()
+        db.session.commit()
+        return success, error if not success else None
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Error rescanning file {filename}: {e}')
+        return False, str(e)
+
+
 def add_missing_apps_to_db():
     logger.info('Adding missing apps to database...')
     titles = get_all_titles()

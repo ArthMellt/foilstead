@@ -671,9 +671,22 @@ def rescan_file_api(file_id):
         if not ok:
             return jsonify({'success': False, 'error': err}), 500
 
-        post_library_change()
+        # Identify this file synchronously so the result is immediate and can't
+        # be beaten by a concurrently-debounced post_library_change call.
+        titles_lib.load_titledb()
+        try:
+            ok, err = rescan_file_in_library(file_id)
+            add_missing_apps_to_db()
+            update_titles()
+            generate_library()
+        finally:
+            titles_lib.identification_in_progress_count -= 1
+            titles_lib.unload_titledb()
 
-        logger.info(f'Rescan queued for file id={file_id} ({file_obj.filename})')
+        if not ok:
+            return jsonify({'success': False, 'error': err}), 500
+
+        logger.info(f'Rescan complete for file id={file_id} ({file_obj.filename})')
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f'Unexpected error in rescan_file_api for file_id={file_id}: {e}')
