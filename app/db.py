@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.sqlite import insert  # Use postgresql if using PostgreSQL
 from flask_migrate import Migrate, upgrade
 from alembic.runtime.migration import MigrationContext
@@ -355,10 +356,21 @@ def add_file_to_app(app_id, app_version, file_id):
     app = get_app_by_id_and_version(app_id, app_version)
     if app:
         file_obj = get_file_from_db(file_id)
-        if file_obj and file_obj not in app.files:
-            app.files.append(file_obj)
-            app.owned = True
-            db.session.commit()
+        if file_obj:
+            db.session.expire(app)  # force fresh load — guards against stale session cache from concurrent writes
+            if file_obj not in app.files:
+                try:
+                    app.files.append(file_obj)
+                    app.owned = True
+                    db.session.commit()
+                except IntegrityError:
+                    db.session.rollback()
+                    # A concurrent process (e.g. background scan) already inserted this row — not an error
+                    logger.debug(f"File {file_id} already linked to app {app_id} v{app_version} (concurrent write)")
+            else:
+                if not app.owned:
+                    app.owned = True
+                    db.session.commit()
             return True
     return False
 
