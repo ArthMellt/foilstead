@@ -118,6 +118,7 @@ class User(UserMixin, db.Model):
     admin_access = db.Column(db.Boolean)
     shop_access = db.Column(db.Boolean)
     backup_access = db.Column(db.Boolean)
+    upload_access = db.Column(db.Boolean, default=False)
 
     @property
     def is_admin(self):
@@ -128,9 +129,12 @@ class User(UserMixin, db.Model):
 
     def has_backup_access(self):
         return self.backup_access
-    
+
     def has_admin_access(self):
         return self.admin_access
+
+    def has_upload_access(self):
+        return self.upload_access
 
     def has_access(self, access):
         if access == 'admin':
@@ -139,6 +143,8 @@ class User(UserMixin, db.Model):
             return self.has_shop_access()
         elif access == 'backup':
             return self.has_backup_access()
+        elif access == 'upload':
+            return self.has_upload_access()
 
 def init_db(app):
     with app.app_context():

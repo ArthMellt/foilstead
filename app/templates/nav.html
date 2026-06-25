@@ -19,6 +19,16 @@
                     <a class="nav-link{% if title == 'Setup' %} active" aria-current="page"{% else %}"{% endif %}" href="/setup">Setup</a>
                 </li>
                 {% endif %}
+                {% if admin_account_created == false or (current_user.is_authenticated and current_user.has_upload_access()) %}
+                <li class="nav-item">
+                    <a class="nav-link{% if title == 'Upload' %} active" aria-current="page"{% else %}"{% endif %}" href="/upload">Upload</a>
+                </li>
+                {% endif %}
+                {% if admin_account_created == false or (current_user.is_authenticated and current_user.is_admin) %}
+                <li class="nav-item">
+                    <a class="nav-link{% if title == 'Send To' %} active" aria-current="page"{% else %}"{% endif %}" href="/send-to">Send To</a>
+                </li>
+                {% endif %}
                 {% if current_user.is_admin or admin_account_created == false %}
                 <li class="nav-item">
                     <a class="nav-link{% if title == 'Settings' %} active" aria-current="page"{% else %}"{% endif %}" href="/settings">Settings</a>

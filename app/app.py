@@ -1,4 +1,9 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory, Response
+from werkzeug.utils import secure_filename
+import ftplib
+import uuid
+import time
+import json
 from flask_login import LoginManager
 from scheduler import init_scheduler, validate_interval_string
 from functools import wraps
@@ -21,6 +26,9 @@ from library import *
 import titledb
 import os
 from clients import CyberFoilClient, TinfoilClient, SphairaClient
+
+_transfer_progress = {}
+_transfer_lock = threading.Lock()
 
 def init():
     global watcher
@@ -439,6 +447,170 @@ def upload_file():
         resp['data']['corrupt_keys'] = corrupt_keys
 
     return jsonify(resp)
+
+
+@app.route('/upload')
+@access_required('upload')
+def upload_page():
+    app_settings = load_settings()
+    library_paths = app_settings['library']['paths']
+    return render_template(
+        'upload.html',
+        title='Upload',
+        library_paths=library_paths,
+        admin_account_created=admin_account_created()
+    )
+
+@app.post('/api/library/upload')
+@access_required('upload')
+def upload_game_files():
+    errors = []
+    saved = []
+
+    dest_path = request.form.get('library_path', '')
+    app_settings = load_settings()
+    valid_paths = app_settings['library']['paths']
+
+    if dest_path not in valid_paths:
+        return jsonify({'success': False, 'errors': ['Invalid library path'], 'saved': []})
+
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'success': False, 'errors': ['No files provided'], 'saved': []})
+
+    for file in files:
+        if not file.filename:
+            continue
+        ext = file.filename.rsplit('.', 1)[-1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            errors.append(f'{file.filename}: unsupported file type')
+            continue
+        filename = secure_filename(file.filename)
+        save_path = os.path.join(dest_path, filename)
+        try:
+            file.save(save_path)
+            saved.append(filename)
+            logger.info(f'Uploaded game file: {save_path}')
+        except Exception as e:
+            errors.append(f'{filename}: {e}')
+            logger.error(f'Failed to save uploaded file {filename}: {e}')
+
+    if saved:
+        post_library_change()
+
+    return jsonify({'success': len(saved) > 0, 'errors': errors, 'saved': saved})
+
+
+@app.route('/send-to')
+@access_required('admin')
+def send_to_page():
+    app_settings = load_settings()
+    send_to_cfg = app_settings.get('send_to', {})
+    files = db.session.query(
+        Files.id, Files.filename, Files.size, Files.extension, Files.identified
+    ).order_by(Files.filename).all()
+    files_list = [{'id': f.id, 'filename': f.filename, 'size': f.size, 'extension': f.extension, 'identified': f.identified} for f in files]
+    return render_template(
+        'send_to.html',
+        title='Send To',
+        send_to=send_to_cfg,
+        files=files_list,
+        admin_account_created=admin_account_created()
+    )
+
+@app.post('/api/settings/send-to')
+@access_required('admin')
+def set_send_to_settings_api():
+    data = request.json
+    try:
+        set_send_to_settings({
+            'host': data.get('host', ''),
+            'port': int(data.get('port', 21)),
+            'username': data.get('username', ''),
+            'password': data.get('password', ''),
+        })
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'Failed to save send_to settings: {e}')
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.post('/api/send-to/send')
+@access_required('admin')
+def send_to_switch():
+    data = request.json
+    file_id = data.get('file_id')
+    if not file_id:
+        return jsonify({'success': False, 'error': 'No file_id provided'})
+
+    file_row = db.session.query(Files.filepath, Files.filename).filter_by(id=file_id).first()
+    if not file_row:
+        return jsonify({'success': False, 'error': 'File not found'})
+
+    filepath, filename = file_row.filepath, file_row.filename
+    app_settings = load_settings()
+    cfg = app_settings.get('send_to', {})
+    host = cfg.get('host', '')
+    port = int(cfg.get('port', 21))
+    username = cfg.get('username', '') or 'anonymous'
+    password = cfg.get('password', '') or ''
+
+    if not host:
+        return jsonify({'success': False, 'error': 'Switch host not configured'})
+
+    transfer_id = str(uuid.uuid4())
+    with _transfer_lock:
+        _transfer_progress[transfer_id] = {'progress': 0, 'done': False, 'error': None}
+
+    def do_ftp():
+        try:
+            file_size = os.path.getsize(filepath)
+            sent = [0]
+
+            def ftp_callback(block):
+                sent[0] += len(block)
+                pct = int(sent[0] / file_size * 100) if file_size else 100
+                with _transfer_lock:
+                    _transfer_progress[transfer_id]['progress'] = pct
+
+            with ftplib.FTP() as ftp:
+                ftp.connect(host, port, timeout=30)
+                ftp.login(username, password)
+                with open(filepath, 'rb') as f:
+                    ftp.storbinary(f'STOR {filename}', f, callback=ftp_callback)
+            logger.info(f'Sent {filename} to Switch at {host}:{port}')
+            with _transfer_lock:
+                _transfer_progress[transfer_id]['progress'] = 100
+                _transfer_progress[transfer_id]['done'] = True
+        except Exception as e:
+            logger.error(f'FTP send failed for {filename}: {e}')
+            with _transfer_lock:
+                _transfer_progress[transfer_id]['error'] = str(e)
+                _transfer_progress[transfer_id]['done'] = True
+
+    threading.Thread(target=do_ftp, daemon=True).start()
+    return jsonify({'success': True, 'transfer_id': transfer_id})
+
+@app.get('/api/send-to/progress/<transfer_id>')
+@access_required('admin')
+def send_to_progress(transfer_id):
+    def generate():
+        while True:
+            with _transfer_lock:
+                state = _transfer_progress.get(transfer_id)
+            if state is None:
+                yield f'data: {json.dumps({"progress": 0, "done": True, "error": "Transfer not found"})}\n\n'
+                break
+            yield f'data: {json.dumps({"progress": state["progress"], "done": state["done"], "error": state["error"]})}\n\n'
+            if state['done']:
+                with _transfer_lock:
+                    _transfer_progress.pop(transfer_id, None)
+                break
+            time.sleep(0.5)
+
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+    })
 
 
 @app.route('/api/titles', methods=['GET'])

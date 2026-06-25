@@ -88,6 +88,11 @@
                                         Access</label>
                                 </div>
                                 <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="checkbox" id="checkboxNewUserUploadAccess">
+                                    <label class="form-check-label" for="checkboxNewUserUploadAccess">Upload
+                                        Access</label>
+                                </div>
+                                <div class="form-check form-check-inline">
                                     <input class="form-check-input" type="checkbox" id="checkboxNewUserAdminAccess">
                                     <label class="form-check-label" for="checkboxNewUserAdminAccess">Admin
                                         Access</label>
@@ -504,12 +509,16 @@
                 base_input = '<input class="form-check-input" type="checkbox" onclick="return false" checked>';
                 shop_input = base_input;
                 backup_input = base_input;
+                upload_input = base_input;
                 admin_input = base_input;
                 if (!user['shop_access']) {
                     shop_input = shop_input.replace(' checked', '');
                 }
                 if (!user['backup_access']) {
                     backup_input = backup_input.replace(' checked', '');
+                }
+                if (!user['upload_access']) {
+                    upload_input = upload_input.replace(' checked', '');
                 }
                 if (!user['admin_access']) {
                     admin_input = shop_input.replace(' checked', '');
@@ -524,6 +533,10 @@
                         <div class="form-check form-check-inline">`
                     + backup_input + `
                             <label class="form-check-label">Backup</label>
+                        </div>
+                        <div class="form-check form-check-inline">`
+                    + upload_input + `
+                            <label class="form-check-label">Upload</label>
                         </div>
                         <div class="form-check form-check-inline">`
                     + admin_input + `
@@ -669,10 +682,12 @@
         if (this.checked != false) {
             $('#checkboxNewUserShopAccess').prop('checked', true).attr("disabled", true);
             $('#checkboxNewUserBackupAccess').prop('checked', true).attr("disabled", true);
+            $('#checkboxNewUserUploadAccess').prop('checked', true).attr("disabled", true);
 
         } else {
             $('#checkboxNewUserShopAccess').attr("disabled", false);
             $('#checkboxNewUserBackupAccess').attr("disabled", false);
+            $('#checkboxNewUserUploadAccess').attr("disabled", false);
 
         }
     });
@@ -808,6 +823,7 @@
         password = getInputVal("inputNewUserPassword")
         shop_access = getCheckboxStatus("checkboxNewUserShopAccess")
         backup_access = getCheckboxStatus("checkboxNewUserBackupAccess")
+        upload_access = getCheckboxStatus("checkboxNewUserUploadAccess")
         admin_access = getCheckboxStatus("checkboxNewUserAdminAccess")
 
         // Validate username
@@ -838,6 +854,7 @@
                 password: password,
                 shop_access: shop_access,
                 backup_access: backup_access,
+                upload_access: upload_access,
                 admin_access: admin_access,
             }
 

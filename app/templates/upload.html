@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "nav.html" %}
+
+<div class="container mt-4">
+    <h2>Upload Games</h2>
+    <p class="text-muted">Upload NSP, NSZ, XCI, or XCZ files directly to your library. The library will be scanned automatically after upload.</p>
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <form id="uploadForm">
+                <div class="mb-3">
+                    <label for="libraryPath" class="form-label">Destination Library</label>
+                    <select class="form-select" id="libraryPath" name="library_path" required>
+                        {% for path in library_paths %}
+                        <option value="{{ path }}">{{ path }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label for="fileInput" class="form-label">Files</label>
+                    <input class="form-control" type="file" id="fileInput" name="files" multiple
+                        accept=".nsp,.nsz,.xci,.xcz">
+                    <div class="form-text">Accepted formats: .nsp, .nsz, .xci, .xcz</div>
+                </div>
+
+                <button type="submit" class="btn btn-primary" id="uploadBtn">Upload</button>
+            </form>
+
+            <div id="progressWrap" class="mt-3 d-none">
+                <div class="d-flex justify-content-between mb-1">
+                    <small id="progressLabel">Uploading...</small>
+                    <small id="progressPct">0%</small>
+                </div>
+                <div class="progress">
+                    <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+                        role="progressbar" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="uploadResults" class="d-none">
+        <div id="uploadSuccess" class="alert alert-success d-none">
+            <strong>Uploaded successfully:</strong>
+            <ul id="savedList" class="mb-0 mt-1"></ul>
+        </div>
+        <div id="uploadErrors" class="alert alert-danger d-none">
+            <strong>Errors:</strong>
+            <ul id="errorList" class="mb-0 mt-1"></ul>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('uploadForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+
+    const btn = document.getElementById('uploadBtn');
+    const progressWrap = document.getElementById('progressWrap');
+    const progressBar = document.getElementById('progressBar');
+    const progressPct = document.getElementById('progressPct');
+    const progressLabel = document.getElementById('progressLabel');
+    const results = document.getElementById('uploadResults');
+    const successBox = document.getElementById('uploadSuccess');
+    const errorBox = document.getElementById('uploadErrors');
+    const savedList = document.getElementById('savedList');
+    const errorList = document.getElementById('errorList');
+
+    btn.disabled = true;
+    results.classList.add('d-none');
+    successBox.classList.add('d-none');
+    errorBox.classList.add('d-none');
+    savedList.innerHTML = '';
+    errorList.innerHTML = '';
+    progressBar.style.width = '0%';
+    progressPct.textContent = '0%';
+    progressLabel.textContent = 'Uploading...';
+    progressWrap.classList.remove('d-none');
+
+    const formData = new FormData();
+    formData.append('library_path', document.getElementById('libraryPath').value);
+    const files = document.getElementById('fileInput').files;
+    for (const file of files) {
+        formData.append('files', file);
+    }
+
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) {
+            const pct = Math.round(e.loaded / e.total * 100);
+            progressBar.style.width = pct + '%';
+            progressPct.textContent = pct + '%';
+            if (pct === 100) {
+                progressLabel.textContent = 'Processing...';
+                progressBar.classList.remove('progress-bar-animated');
+            }
+        }
+    };
+
+    xhr.onload = function () {
+        progressWrap.classList.add('d-none');
+        results.classList.remove('d-none');
+
+        let data;
+        try { data = JSON.parse(xhr.responseText); } catch { data = {}; }
+
+        if (data.saved && data.saved.length > 0) {
+            successBox.classList.remove('d-none');
+            data.saved.forEach(f => {
+                const li = document.createElement('li');
+                li.textContent = f;
+                savedList.appendChild(li);
+            });
+        }
+        if (data.errors && data.errors.length > 0) {
+            errorBox.classList.remove('d-none');
+            data.errors.forEach(err => {
+                const li = document.createElement('li');
+                li.textContent = err;
+                errorList.appendChild(li);
+            });
+        }
+
+        btn.disabled = false;
+        document.getElementById('fileInput').value = '';
+    };
+
+    xhr.onerror = function () {
+        progressWrap.classList.add('d-none');
+        results.classList.remove('d-none');
+        errorBox.classList.remove('d-none');
+        const li = document.createElement('li');
+        li.textContent = 'Network error during upload.';
+        errorList.appendChild(li);
+        btn.disabled = false;
+    };
+
+    xhr.open('POST', '/api/library/upload');
+    xhr.send(formData);
+});
+</script>
+
+{% endblock %}
