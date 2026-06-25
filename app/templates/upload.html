@@ -26,7 +26,10 @@
                     <div class="form-text">Accepted formats: .nsp, .nsz, .xci, .xcz</div>
                 </div>
 
-                <button type="submit" class="btn btn-primary" id="uploadBtn">Upload</button>
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary" id="uploadBtn">Upload</button>
+                    <button type="button" class="btn btn-secondary d-none" id="cancelBtn">Cancel</button>
+                </div>
             </form>
 
             <div id="progressWrap" class="mt-3 d-none">
@@ -66,23 +69,64 @@ function formatBytes(bytes) {
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
+const btn = document.getElementById('uploadBtn');
+const cancelBtn = document.getElementById('cancelBtn');
+const progressWrap = document.getElementById('progressWrap');
+const progressBar = document.getElementById('progressBar');
+const progressPct = document.getElementById('progressPct');
+const progressLabel = document.getElementById('progressLabel');
+const progressSize = document.getElementById('progressSize');
+const progressSpeed = document.getElementById('progressSpeed');
+const results = document.getElementById('uploadResults');
+const successBox = document.getElementById('uploadSuccess');
+const errorBox = document.getElementById('uploadErrors');
+const savedList = document.getElementById('savedList');
+const errorList = document.getElementById('errorList');
+
+let activeXhr = null;
+
+function resetUploadUI() {
+    btn.disabled = false;
+    cancelBtn.classList.add('d-none');
+    progressWrap.classList.add('d-none');
+    progressBar.classList.add('progress-bar-animated');
+    activeXhr = null;
+}
+
+cancelBtn.addEventListener('click', function () {
+    if (!activeXhr) return;
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = 'Cancelling...';
+
+    const libraryPath = document.getElementById('libraryPath').value;
+    const files = document.getElementById('fileInput').files;
+    const filenames = Array.from(files).map(f => f.name);
+
+    activeXhr.abort();
+
+    fetch('/api/library/upload/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ library_path: libraryPath, filenames: filenames })
+    }).finally(function () {
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = 'Cancel';
+        resetUploadUI();
+        results.classList.remove('d-none');
+        errorBox.classList.remove('d-none');
+        errorList.innerHTML = '';
+        const li = document.createElement('li');
+        li.textContent = 'Upload cancelled.';
+        errorList.appendChild(li);
+        document.getElementById('fileInput').value = '';
+    });
+});
+
 document.getElementById('uploadForm').addEventListener('submit', function (e) {
     e.preventDefault();
 
-    const btn = document.getElementById('uploadBtn');
-    const progressWrap = document.getElementById('progressWrap');
-    const progressBar = document.getElementById('progressBar');
-    const progressPct = document.getElementById('progressPct');
-    const progressLabel = document.getElementById('progressLabel');
-    const progressSize = document.getElementById('progressSize');
-    const progressSpeed = document.getElementById('progressSpeed');
-    const results = document.getElementById('uploadResults');
-    const successBox = document.getElementById('uploadSuccess');
-    const errorBox = document.getElementById('uploadErrors');
-    const savedList = document.getElementById('savedList');
-    const errorList = document.getElementById('errorList');
-
     btn.disabled = true;
+    cancelBtn.classList.remove('d-none');
     results.classList.add('d-none');
     successBox.classList.add('d-none');
     errorBox.classList.add('d-none');
@@ -106,6 +150,7 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
     }
 
     const xhr = new XMLHttpRequest();
+    activeXhr = xhr;
 
     xhr.upload.onprogress = function (e) {
         if (e.lengthComputable) {
@@ -128,12 +173,13 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
                 progressLabel.textContent = 'Processing...';
                 progressBar.classList.remove('progress-bar-animated');
                 progressSpeed.textContent = '';
+                cancelBtn.classList.add('d-none');
             }
         }
     };
 
     xhr.onload = function () {
-        progressWrap.classList.add('d-none');
+        resetUploadUI();
         results.classList.remove('d-none');
 
         let data;
@@ -156,18 +202,20 @@ document.getElementById('uploadForm').addEventListener('submit', function (e) {
             });
         }
 
-        btn.disabled = false;
         document.getElementById('fileInput').value = '';
     };
 
     xhr.onerror = function () {
-        progressWrap.classList.add('d-none');
+        resetUploadUI();
         results.classList.remove('d-none');
         errorBox.classList.remove('d-none');
         const li = document.createElement('li');
         li.textContent = 'Network error during upload.';
         errorList.appendChild(li);
-        btn.disabled = false;
+    };
+
+    xhr.onabort = function () {
+        // cleanup handled by the cancel button's fetch call
     };
 
     xhr.open('POST', '/api/library/upload');

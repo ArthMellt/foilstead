@@ -502,6 +502,36 @@ def upload_game_files():
     return jsonify({'success': len(saved) > 0, 'errors': errors, 'saved': saved})
 
 
+@app.post('/api/library/upload/cancel')
+@access_required('upload')
+def cancel_game_upload():
+    data = request.get_json(silent=True) or {}
+    dest_path = data.get('library_path', '')
+    filenames = data.get('filenames', [])
+
+    app_settings = load_settings()
+    valid_paths = app_settings['library']['paths']
+
+    if dest_path not in valid_paths:
+        return jsonify({'success': False, 'error': 'Invalid library path'})
+
+    deleted = []
+    for filename in filenames:
+        safe_name = secure_filename(filename)
+        if not safe_name:
+            continue
+        file_path = os.path.join(dest_path, safe_name)
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                deleted.append(safe_name)
+                logger.info(f'Cancelled upload, deleted partial file: {file_path}')
+            except Exception as e:
+                logger.error(f'Failed to delete cancelled upload {file_path}: {e}')
+
+    return jsonify({'success': True, 'deleted': deleted})
+
+
 @app.route('/send-to')
 @access_required('admin')
 def send_to_page():
