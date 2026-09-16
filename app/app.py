@@ -808,8 +808,18 @@ def get_library_files_api():
                 'app_type': app.app_type,
                 'app_version': app.app_version,
                 'title_id': app.title.title_id if app.title else None,
+                'owned': app.owned,
             }
             for app in f.apps
+        ]
+        app_types = list({app.app_type for app in f.apps if app.app_type})
+        title_statuses = [
+            {
+                'has_latest_version': app.title.up_to_date,
+                'has_all_dlcs': app.title.complete,
+            }
+            for app in f.apps
+            if app.title
         ]
         result.append({
             'id': f.id,
@@ -821,9 +831,38 @@ def get_library_files_api():
             'identification_error': f.identification_error,
             'multicontent': f.multicontent,
             'contents': contents,
+            'app_types': app_types,
+            'title_statuses': title_statuses,
         })
 
     return jsonify({'files': result})
+
+
+@app.delete('/api/library/files/<int:file_id>')
+@access_required('admin')
+def delete_library_file_api(file_id):
+    file_obj = Files.query.filter_by(id=file_id).first()
+    if not file_obj:
+        return jsonify({'success': False, 'error': 'File not found'}), 404
+
+    if not os.path.isfile(file_obj.filepath):
+        return jsonify({'success': False, 'error': 'File no longer exists on disk'}), 400
+
+    filename = file_obj.filename
+    filepath = file_obj.filepath
+    try:
+        os.remove(filepath)
+        remove_file_from_apps(file_id)
+        db.session.delete(file_obj)
+        remove_titles_without_owned_apps()
+        db.session.commit()
+        post_library_change()
+        logger.info(f'Deleted library file: {filepath}')
+        return jsonify({'success': True, 'filename': filename})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Failed to delete library file {filepath}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # @app.before_request
