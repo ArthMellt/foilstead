@@ -715,16 +715,11 @@
             return;
         }
 
-        // Filter by search term only (type/ownership filters apply to title data, not files)
-        const searchTerm = $('#textFilter').val().toLowerCase();
-        let display = files;
-        if (searchTerm) {
-            display = files.filter(f =>
-                f.filename.toLowerCase().includes(searchTerm) ||
-                (f.contents || []).some(c => (c.app_id || '').toLowerCase().includes(searchTerm))
-            );
-        }
+        const display = filterLibraryFiles(files);
 
+        if (display.length > 0 && (currentPage - 1) * itemsPerPage >= display.length) {
+            currentPage = Math.ceil(display.length / itemsPerPage);
+        }
         const start = (currentPage - 1) * itemsPerPage;
         const page = display.slice(start, start + itemsPerPage);
 
@@ -766,9 +761,9 @@
             }
             row.append(contentsCell);
 
-            const rescanBtn = $('<button class="btn btn-sm btn-outline-secondary">Rescan</button>');
-            rescanBtn.on('click', () => rescanFile(file.id, file.filename));
-            row.append($('<td class="align-middle"></td>').append(rescanBtn));
+            const deleteBtn = $('<button class="btn btn-sm btn-outline-danger">Delete</button>');
+            deleteBtn.on('click', () => deleteFile(file.id, file.filename, deleteBtn));
+            row.append($('<td class="align-middle"></td>').append(deleteBtn));
 
             tbody.append(row);
         });
@@ -777,6 +772,52 @@
         const wrapper = $('<div class="w-100"></div>').append(table);
         gameGrid.empty().append(wrapper);
         updatePaginationControls(display.length);
+    }
+
+    function filterLibraryFiles(files) {
+        const searchTerm = ($('#textFilter').val() || '').toLowerCase().trim();
+        return files.filter(file => {
+            const contents = file.contents || [];
+            const appTypes = file.app_types || [];
+            const titleStatuses = file.title_statuses || [];
+
+            if (searchTerm && !(
+                (file.filename || '').toLowerCase().includes(searchTerm) ||
+                contents.some(content =>
+                    (content.app_id || '').toLowerCase().includes(searchTerm) ||
+                    (content.title_id || '').toLowerCase().includes(searchTerm)
+                )
+            )) {
+                return false;
+            }
+
+            if (activeTypeFilter && !appTypes.includes(activeTypeFilter)) {
+                return false;
+            }
+
+            if (activeOwnershipFilter === 'Owned' && !contents.some(content => content.owned === true)) {
+                return false;
+            }
+            if (activeOwnershipFilter === 'Missing' && !contents.some(content => content.owned === false)) {
+                return false;
+            }
+
+            if (activeUpdateFilter === 'Up to date' && !titleStatuses.some(status => status.has_latest_version === true)) {
+                return false;
+            }
+            if (activeUpdateFilter === 'Outdated' && !titleStatuses.some(status => status.has_latest_version === false)) {
+                return false;
+            }
+
+            if (activeCompletionFilter === 'Complete' && !titleStatuses.some(status => status.has_all_dlcs === true)) {
+                return false;
+            }
+            if (activeCompletionFilter === 'Missing DLC' && !titleStatuses.some(status => status.has_all_dlcs === false)) {
+                return false;
+            }
+
+            return true;
+        });
     }
 
     function buildStatusBadge(file) {
@@ -794,35 +835,27 @@
         }
     }
 
-    async function rescanFile(fileId, filename) {
-        const statusCell = $(`#list-id-status-${fileId}`);
-        const row = $(`#list-file-row-${fileId}`);
-        const btn = row.find('button');
-
-        btn.prop('disabled', true).text('…');
-        statusCell.html('<span class="badge bg-secondary">queuing…</span>');
-
-        try {
-            const resp = await fetch(`/api/library/rescan-file/${fileId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            const result = await resp.json();
-
-            if (result.success) {
-                statusCell.html('<span class="badge bg-info text-dark">queued</span>');
-                libraryFiles = null; // invalidate cache
-                showLibraryToast(`${filename} queued for re-identification`, true);
-            } else {
-                statusCell.html('<span class="badge bg-danger">error</span>');
-                showLibraryToast(`Rescan failed: ${result.error}`, false);
-            }
-        } catch (err) {
-            statusCell.html('<span class="badge bg-danger">error</span>');
-            showLibraryToast('Unexpected error: ' + err, false);
+    async function deleteFile(fileId, filename, btn) {
+        if (!window.confirm(`Delete ${filename} from the library? This will remove the file from disk.`)) {
+            return;
         }
 
-        btn.prop('disabled', false).text('Rescan');
+        btn.prop('disabled', true).text('Deleting...');
+        try {
+            const resp = await fetch(`/api/library/files/${fileId}`, { method: 'DELETE' });
+            const result = await resp.json();
+
+            if (!resp.ok || !result.success) {
+                throw new Error(result.error || `HTTP ${resp.status}`);
+            }
+
+            libraryFiles = null;
+            showLibraryToast(`${filename} deleted`, true);
+            await renderListView();
+        } catch (err) {
+            btn.prop('disabled', false).text('Delete');
+            showLibraryToast(`Delete failed: ${err.message || err}`, false);
+        }
     }
 
     function showLibraryToast(message, success) {
